@@ -6,8 +6,9 @@ import argparse
 from dataclasses import dataclass
 import importlib.util
 import sys
-from AIHandler import AIHandler
+from AIHandler import AIHandler, OllamaRequestHandler
 from config import Config
+import json
 import requests
 from fastapi import FastAPI
 
@@ -25,6 +26,14 @@ import uvicorn
 #
 # Helpers Funciton
 #
+def writeToJsonFile( filePath, jsonDicts ):
+    with open( filePath, 'w' ) as f:
+        f.write( json.dumps( jsonDicts ) )
+
+def readFromJsonFile( filePath ):
+    with open( filePath, 'r' ) as f:
+        return json.loads( f.read() )
+
 def loadConfig( configPath ):
     spec = importlib.util.spec_from_file_location( 'config', configPath )
     module = importlib.util.module_from_spec( spec )
@@ -45,20 +54,27 @@ class ServerHandler:
         self.config = config
         self.aiHandler = aiHandler
 
+    def initialize( self ):
+        self.initRoutes()
+
     def initRoutes( self ):
 
-        @self.app.post("/chat")
-        def chat(req: ChatRequest):
-            return aiHandler.requestToAI(req.message)
+        @self.app.post( '/chat' )
+        def chat( req: ChatRequest ):
+            res = self.aiHandler.sendMessage( req.message )
+            return res
 
-        @self.app.post("/clear")
+        @self.app.post( '/clear' )
         def clear():
-            aiHandler.messageCaches.clear()
-            return {"status": "cleared"}
+            self.aiHandler.messageCaches.clear()
+            return { 'status': 'cleared' }
 
     def run( self ):
         uvicorn.run( self.app, host=self.config.ServerHost, port=self.config.ServerPort )
 
+    def cacheMessage( self ):
+        jsonDicts = list( map( lambda m: m.asDict(), self.aiHandler.messageCaches ) )
+        writeToJsonFile( self.config.CacheFilePath, jsonDicts )
 
 ##############################
 #
@@ -72,8 +88,11 @@ if __name__ == '__main__':
 
     config = loadConfig( args.configFile )
 
-    aiHandler = AIHandler( config )
+    handler = OllamaRequestHandler( config )
+    aiHandler = AIHandler( config, handler )
     server = ServerHandler( config, aiHandler )
     server.initRoutes()
-    server.run()
-
+    try:
+        server.run()
+    except Exception:
+        server.cacheMessage()

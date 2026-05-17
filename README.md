@@ -4,6 +4,9 @@ This is for run local LLM using ollama on Mac.
 ### Setup
 ```
 brew install ollama
+
+# pull model for embeded
+ollama pull nomic-embed-text
 ```
 
 ### Run by

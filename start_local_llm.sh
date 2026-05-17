@@ -20,7 +20,7 @@ tmux new-window -t $SESSION -n 'api'
 
 tmux send-keys -t $SESSION:1 '
 cd ~/Work/local_llm &&
-source venv/bin/activate &&
+source venv3.12/bin/activate &&
 python3 main.py config.py
 ' C-m
 
