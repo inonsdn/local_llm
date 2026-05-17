@@ -3,6 +3,7 @@
 # Standart Import
 #
 import argparse
+import hashlib
 import chromadb
 from dataclasses import dataclass
 import importlib.util
@@ -35,15 +36,21 @@ def cosine_similarity( vec_a, vec_b ):
 
 # result: 1.0 = identical, 0.0 = unrelated, -1.0 = opposite
 
+def getChunkId(userId: str, source: str, content: str) -> str:
+    contentHash = hashlib.md5(content.encode()).hexdigest()[:8]
+    return f'{userId}_{source}_{contentHash}'
+
 ##############################
 #
 # Class
 #
 class Message:
 
-    def __init__( self, role: str, content: str ):
+    def __init__( self, role: str, content: str, userId: str, roomId: str ):
         self.role = role
         self.content = content
+        self.userId = userId
+        self.roomId = roomId
 
         self.embededContext = None
 
@@ -51,14 +58,19 @@ class Message:
     def augmentedMessage( self ):
         if self.embededContext is None:
             return self.content
-        return f'''
-            Use the context below to answer the question.
-            If the answer isn't in the context, use your own knowledge.
-            Context: 
-            {self.embededContext}
+        return (
+            f"Use the context below to answer the question.\n"
+            f"If the answer isn't in the context, use your own knowledge.\n\n"
+            f"Context:\n{self.embededContext}\n\n"
+            f"Question: {self.content}"
+        )
 
-            Question: {self.content}
-        '''
+    def chunkGenerator( self ):
+        words = self.content.split()
+        for i in range( 0, len( words ), ChunkSize - ChunkOverlap ):
+            chunk = ' '.join( words[ i: i + ChunkSize ] )
+            if chunk:
+                yield Message( self.role, chunk, self.userId, self.roomId )
 
     def setAugmentedContext( self, context: str ):
         self.embededContext = context
@@ -66,7 +78,15 @@ class Message:
     def getRequestJson( self ):
         return {
             'role': self.role,
-            'content': self.augmentedMessage
+            'content': self.augmentedMessage,
+        }
+
+    def asDict( self ):
+        return {
+            'role': self.role,
+            'content': self.content,
+            'user_id': self.userId,
+            'room_id': self.roomId,
         }
 
 class MessageCache:
@@ -74,21 +94,43 @@ class MessageCache:
     def __init__( self, config ):
         self.config = config
         self.messageCaches: list[ Message ] = list()
+        self.caches: dict[ dict ] = dict()
 
     def initialize( self ):
         jsonDicts = readFromJsonFile( self.config.CacheFilePath )
         for jsonDict in jsonDicts:
-            msg = Message( jsonDict['role'], jsonDict['content'] )
+            msg = Message( jsonDict['role'], jsonDict['content'], jsonDict[ 'user_id' ], jsonDict[ 'room_id' ] )
             self.add( msg )
 
-    def constructUserMessage( self, msg: str ):
-        return Message( 'user', msg )
-
     def add( self, msg: Message ):
-        self.messageCaches.append( msg )
+        # self.messageCaches.append( msg )
+        userId = msg.userId
+        chatRoomId = msg.roomId
+        if userId not in self.caches:
+            self.caches[ userId ] = dict()
+
+        if chatRoomId not in self.caches[ userId ]:
+            self.caches[ userId ][ chatRoomId ] = list()
+
+        self.caches[ userId ][ chatRoomId ].append( msg )
+
+    def getMessageCache( self, userId, roomId ):
+        if userId not in self.caches:
+            return []
+        if roomId is None:
+            historicals = []
+            for msgs in self.caches[ userId ].values():
+                historicals.extend( msgs )
+            return historicals
+        if roomId not in self.caches[ userId ]:
+            return []
+        return self.caches[ userId ][ roomId ]
 
     def toFile( self ):
-        jsonDicts = list( map( lambda m: m.asDict(), self.messageCaches ) )
+        jsonDicts = []
+        for roomToMsg in self.caches.values():
+            for msg in roomToMsg.values():
+                jsonDicts.append( msg.asDict() )
         writeToJsonFile( self.config.CacheFilePath, jsonDicts )
 
 class OllamaRequestHandler:
@@ -187,45 +229,35 @@ class AIHandler:
         '''
         '''
 
-    def getChunkMessage( self, text: str ) -> list[ Message ]:
-
-        words = text.split()
-        chunks = []
-        for i in range( 0, len( words ), ChunkSize - ChunkOverlap ):
-            chunk = ' '.join( words[ i: i + ChunkSize ] )
-            if chunk:
-                chunks.append( Message( 'user', chunk ) )
-        return chunks
-
     def indexTextToDb( self, message: Message, source: str = 'unknown' ):
 
-        chunkMessages = self.getChunkMessage( message.content )
+        userId = message.userId
 
-        for i, msgObj in enumerate( chunkMessages ):
+        for msgObj in message.chunkGenerator():
 
             embededResults = self.handler.getEmbeded( msgObj )
 
-            documentId = f'{source}_{i}'
+            documentId = getChunkId( userId, source, msgObj.content )
 
             if self.dbDocumentCollection.get( ids = [documentId,] )[ 'ids' ]:
                 self.dbDocumentCollection.update(
                     ids = [ documentId, ],
                     embeddings = [ embededResults, ],
                     documents = [ msgObj.content, ],
-                    metadatas=[ { 'source': source } ],
+                    metadatas=[ { 'source': source, 'user_id': userId, } ],
                 )
             else:
                 self.dbDocumentCollection.add(
                     ids = [ documentId, ],
                     embeddings = [ embededResults, ],
                     documents = [ msgObj.content, ],
-                    metadatas=[ { 'source': source } ],
+                    metadatas=[ { 'source': source, 'user_id': userId, } ],
                 )
 
-    def sendMessage( self, message: str ):
+    def sendMessage( self, message: str, userId: str = None, roomId: str = None ):
 
         # construct message object
-        msgObj = Message( 'user', message )
+        msgObj = Message( 'user', message, userId, roomId )
 
         # get embeded vector dimension score from given message
         embededResults = self.handler.getEmbeded( msgObj )
@@ -237,6 +269,7 @@ class AIHandler:
             relatedEmbededDicts = self.dbDocumentCollection.query(
                 query_embeddings = [ embededResults, ],
                 n_results=min( 3, self.dbDocumentCollection.count() ),
+                where={ 'user_id': userId, }
             )
 
             # get list of context that related and construct and set to message
@@ -245,11 +278,14 @@ class AIHandler:
             msgObj.setAugmentedContext( mostRelatedContextsStr )
 
         try:
-            resultMessage = self.handler.getAIAnswer( msgObj, self.messageCaches.messageCaches )
+            resultMessage = self.handler.getAIAnswer( msgObj, self.messageCaches.getMessageCache( userId, roomId ) )
         except ValueError:
-            resultMessage = 'Something error'
+            resultMessage = { 'error': 'Something error' }
         else:
             self.messageCaches.add( msgObj )
+            assistantMsg = Message( 'assistant', resultMessage['content'], userId, roomId )
+            self.messageCaches.add( assistantMsg )
+
             if self.handler.isPersonalFact( msgObj.content ):
                 self.indexTextToDb( msgObj, source='user' )
 

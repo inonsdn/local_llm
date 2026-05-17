@@ -3,14 +3,14 @@
 import { useState, useRef, useEffect, use } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  getHistory,
   getRoom,
+  getMessages,
   appendMessage,
-  clearHistory,
-  saveRoom,
+  clearMessages,
+  updateRoom,
   type ChatMessage,
   type ChatRoom,
-} from '@/lib/storage';
+} from '@/lib/db';
 
 export default function ChatRoomPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -21,16 +21,13 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const idRef = useRef(Date.now());
 
   useEffect(() => {
-    const r = getRoom(id);
-    if (!r) {
-      router.replace('/');
-      return;
-    }
-    setRoom(r);
-    setMessages(getHistory(id));
+    getRoom(id).then((r) => {
+      if (!r) { router.replace('/'); return; }
+      setRoom(r);
+    });
+    getMessages(id).then(setMessages).catch(console.error);
   }, [id, router]);
 
   useEffect(() => {
@@ -41,51 +38,30 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
     const text = input.trim();
     if (!text || loading || !room) return;
 
-    const userMsg: ChatMessage = {
-      id: idRef.current++,
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
-    };
-
-    appendMessage(id, userMsg);
-    setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setLoading(true);
+
+    const userMsg = await appendMessage(id, 'user', text);
+    setMessages((prev) => [...prev, userMsg]);
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, room_id: id }),
       });
 
       const data = await res.json();
-      const aiMsg: ChatMessage = {
-        id: idRef.current++,
-        role: 'assistant',
-        content: data.content ?? data.response ?? data.message ?? JSON.stringify(data),
-        timestamp: Date.now(),
-      };
+      const content: string = data.content ?? data.response ?? data.message ?? JSON.stringify(data);
 
-      appendMessage(id, aiMsg);
+      const aiMsg = await appendMessage(id, 'assistant', content);
       setMessages((prev) => [...prev, aiMsg]);
 
-      const updatedRoom: ChatRoom = {
-        ...room,
-        lastMessageAt: Date.now(),
-        preview: aiMsg.content.slice(0, 80),
-      };
-      saveRoom(updatedRoom);
-      setRoom(updatedRoom);
+      const now = new Date().toISOString();
+      await updateRoom(id, { preview: content.slice(0, 80), last_message_at: now });
+      setRoom((r) => r ? { ...r, preview: content.slice(0, 80), last_message_at: now } : r);
     } catch {
-      const errMsg: ChatMessage = {
-        id: idRef.current++,
-        role: 'assistant',
-        content: 'Error: could not reach AI server.',
-        timestamp: Date.now(),
-      };
-      appendMessage(id, errMsg);
+      const errMsg = await appendMessage(id, 'assistant', 'Error: could not reach AI server.');
       setMessages((prev) => [...prev, errMsg]);
     } finally {
       setLoading(false);
@@ -93,13 +69,17 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
   }
 
   async function handleClear() {
-    await fetch('/api/chat', { method: 'DELETE' });
-    clearHistory(id);
+    await fetch('/api/chat', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_id: id }),
+    });
+    await clearMessages(id);
     setMessages([]);
     if (room) {
-      const updatedRoom = { ...room, preview: '', lastMessageAt: Date.now() };
-      saveRoom(updatedRoom);
-      setRoom(updatedRoom);
+      const now = new Date().toISOString();
+      await updateRoom(id, { preview: '', last_message_at: now });
+      setRoom({ ...room, preview: '', last_message_at: now });
     }
   }
 

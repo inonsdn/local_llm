@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass
 import importlib.util
 import sys
+from uuid import UUID
 from AIHandler import AIHandler, OllamaRequestHandler
 from config import Config
 import json
@@ -46,6 +47,8 @@ def loadConfig( configPath ):
 #
 class ChatRequest( BaseModel ):
     message: str
+    user_id: str | None = None
+    room_id: str | None = None
 
 class ServerHandler:
 
@@ -61,11 +64,11 @@ class ServerHandler:
 
         @self.app.post( '/chat' )
         def chat( req: ChatRequest ):
-            res = self.aiHandler.sendMessage( req.message )
+            res = self.aiHandler.sendMessage( req.message, userId=UUID( req.user_id ).bytes.hex(), roomId=UUID( req.room_id ).bytes.hex() )
             return res
 
         @self.app.post( '/clear' )
-        def clear():
+        def clear( req: ChatRequest = None ):
             self.aiHandler.messageCaches.clear()
             return { 'status': 'cleared' }
 

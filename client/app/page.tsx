@@ -2,10 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getRooms, createRoom, deleteRoom, type ChatRoom } from '@/lib/storage';
+import { createClient } from '@/lib/supabase/client';
+import { getRooms, createRoom, deleteRoom, type ChatRoom } from '@/lib/db';
 
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
+function timeAgo(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
@@ -19,34 +20,60 @@ export default function RoomsPage() {
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
 
   useEffect(() => {
-    setRooms(getRooms());
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user?.email) setUserEmail(user.email);
+    });
+    getRooms().then(setRooms).catch(console.error);
   }, []);
 
-  function handleCreate() {
-    const room = createRoom(newName);
-    setNewName('');
-    setCreating(false);
-    router.push(`/chat/${room.id}`);
+  async function handleCreate() {
+    try {
+      const room = await createRoom(newName);
+      setNewName('');
+      setCreating(false);
+      router.push(`/chat/${room.id}`);
+    } catch (err) {
+      console.error(err);
+    }
   }
 
-  function handleDelete(e: React.MouseEvent, id: string) {
+  async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
-    deleteRoom(id);
-    setRooms(getRooms());
+    await deleteRoom(id);
+    setRooms((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push('/login');
   }
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-gray-100">
       <header className="flex items-center justify-between px-6 py-4 border-b border-gray-800 shrink-0">
         <h1 className="text-lg font-semibold tracking-tight">Local AI Chat</h1>
-        <button
-          onClick={() => setCreating(true)}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500 transition-colors"
-        >
-          + New Chat
-        </button>
+        <div className="flex items-center gap-3">
+          {userEmail && (
+            <span className="text-xs text-gray-500 hidden sm:block">{userEmail}</span>
+          )}
+          <button
+            onClick={() => setCreating(true)}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500 transition-colors"
+          >
+            + New Chat
+          </button>
+          <button
+            onClick={handleSignOut}
+            className="rounded-lg bg-gray-800 px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <main className="flex-1 overflow-y-auto px-4 py-6">
@@ -103,7 +130,7 @@ export default function RoomsPage() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium truncate">{room.name}</span>
-                  <span className="text-xs text-gray-500 shrink-0">{timeAgo(room.lastMessageAt)}</span>
+                  <span className="text-xs text-gray-500 shrink-0">{timeAgo(room.last_message_at)}</span>
                 </div>
                 {room.preview && (
                   <p className="text-xs text-gray-500 truncate mt-0.5">{room.preview}</p>

@@ -1,30 +1,49 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 
 const AI_URL = `http://${process.env.AI_HOST}:${process.env.AI_PORT}`;
 
 export async function POST(req: NextRequest) {
-    const { message } = await req.json();
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
-    const res = await fetch(`${AI_URL}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
-    });
+  const { message, room_id } = await req.json();
 
-    if (!res.ok) {
-        return NextResponse.json({ error: 'AI server error' }, { status: res.status });
-    }
+  const res = await fetch(`${AI_URL}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, user_id: user.id, room_id }),
+  });
 
-    const data = await res.json();
-    return NextResponse.json(data);
+  if (!res.ok) {
+    return NextResponse.json({ error: 'AI server error' }, { status: res.status });
+  }
+
+  const data = await res.json();
+  return NextResponse.json(data);
 }
 
-export async function DELETE() {
-    const res = await fetch(`${AI_URL}/clear`, { method: 'POST' });
+export async function DELETE(req: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
-    if (!res.ok) {
-        return NextResponse.json({ error: 'AI server error' }, { status: res.status });
-    }
+  const { room_id } = await req.json().catch(() => ({}));
 
-    return NextResponse.json({ status: 'cleared' });
+  const res = await fetch(`${AI_URL}/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: user.id, room_id }),
+  });
+
+  if (!res.ok) {
+    return NextResponse.json({ error: 'AI server error' }, { status: res.status });
+  }
+
+  return NextResponse.json({ status: 'cleared' });
 }
