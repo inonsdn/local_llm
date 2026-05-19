@@ -21,10 +21,10 @@ function SkeletonRoom() {
       className="flex items-center gap-4 rounded-2xl px-4 py-3 animate-pulse"
       style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
     >
-      <div className="w-10 h-10 rounded-full shrink-0" style={{ background: 'var(--accent-muted)' }} />
+      <div className="w-11 h-11 rounded-full shrink-0" style={{ background: 'var(--accent-muted)' }} />
       <div className="flex-1 space-y-2">
         <div className="h-3 rounded-full w-2/5" style={{ background: 'var(--accent-muted)' }} />
-        <div className="h-2 rounded-full w-3/5" style={{ background: 'var(--border)' }} />
+        <div className="h-2.5 rounded-full w-3/5" style={{ background: 'var(--border)' }} />
       </div>
     </li>
   );
@@ -44,24 +44,28 @@ function InputDialog({ title, placeholder, initialValue = '', confirmLabel, onCo
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
+    // small delay so the animation settles before focusing (avoids iOS keyboard jump)
+    const t = setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 50);
+    return () => clearTimeout(t);
   }, []);
 
-  function handleConfirm() {
+  function submit() {
     const trimmed = value.trim();
-    if (!trimmed) return;
-    onConfirm(trimmed);
+    if (trimmed) onConfirm(trimmed);
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
       style={{ background: 'var(--bg-overlay)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
+      {/* Sheet on mobile, centered card on desktop */}
       <div
-        className="w-full max-w-sm rounded-2xl p-6 flex flex-col gap-4"
+        className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl p-6 flex flex-col gap-4"
         style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
       >
         <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>
@@ -69,32 +73,33 @@ function InputDialog({ title, placeholder, initialValue = '', confirmLabel, onCo
         </h2>
         <input
           ref={inputRef}
-          className="w-full rounded-xl px-4 py-3 text-sm outline-none"
+          className="w-full rounded-xl px-4 py-3 outline-none"
           style={{
             background: 'var(--bg-input)',
             border: '1px solid var(--border-focus)',
             color: 'var(--text-primary)',
+            fontSize: '16px', // prevents iOS zoom
           }}
           placeholder={placeholder}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') handleConfirm();
+            if (e.key === 'Enter') submit();
             if (e.key === 'Escape') onClose();
           }}
         />
-        <div className="flex gap-2 justify-end">
+        <div className="flex gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-sm transition-colors"
+            className="flex-1 py-3 rounded-xl text-sm font-medium"
             style={{ background: 'var(--bg-input)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
           >
             Cancel
           </button>
           <button
-            onClick={handleConfirm}
+            onClick={submit}
             disabled={!value.trim()}
-            className="px-4 py-2 rounded-xl text-sm font-medium transition-colors disabled:opacity-40"
+            className="flex-1 py-3 rounded-xl text-sm font-medium disabled:opacity-40"
             style={{ background: 'var(--accent)', color: '#fff' }}
           >
             {confirmLabel}
@@ -111,13 +116,12 @@ export default function RoomsPage() {
   const [loadingRooms, setLoadingRooms] = useState(true);
   const [userEmail, setUserEmail] = useState('');
   const [search, setSearch] = useState('');
-
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [renameRoom, setRenameRoom] = useState<ChatRoom | null>(null);
 
-  // long-press state
-  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pressedRoomId = useRef<string | null>(null);
+  // long-press detection
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didLongPress = useRef(false);
 
   useEffect(() => {
     const supabase = createClient();
@@ -158,37 +162,41 @@ export default function RoomsPage() {
     router.push('/login');
   }
 
-  const startPress = useCallback((room: ChatRoom) => {
-    pressedRoomId.current = room.id;
-    pressTimer.current = setTimeout(() => {
-      pressedRoomId.current = null;
+  const onPressStart = useCallback((room: ChatRoom) => {
+    didLongPress.current = false;
+    longPressTimer.current = setTimeout(() => {
+      didLongPress.current = true;
       setRenameRoom(room);
-    }, 500);
+    }, 600);
   }, []);
 
-  const cancelPress = useCallback(() => {
-    if (pressTimer.current) clearTimeout(pressTimer.current);
-    pressTimer.current = null;
-  }, []);
-
-  function handleRoomClick(room: ChatRoom) {
-    if (pressedRoomId.current === room.id) {
-      pressedRoomId.current = null;
-      router.push(`/chat/${room.id}`);
+  const onPressEnd = useCallback(() => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
     }
+  }, []);
+
+  function onTap(room: ChatRoom) {
+    // if long press already fired, don't navigate
+    if (didLongPress.current) {
+      didLongPress.current = false;
+      return;
+    }
+    router.push(`/chat/${room.id}`);
   }
 
   return (
     <div
-      className="flex flex-col h-screen"
+      className="flex flex-col h-full-screen"
       style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
       {/* Header */}
       <header
-        className="flex items-center justify-between px-4 sm:px-6 py-4 shrink-0"
+        className="flex items-center justify-between px-4 py-4 shrink-0"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
-        <h1 className="text-lg font-semibold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+        <h1 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
           AI Chat
         </h1>
         <div className="flex items-center gap-2">
@@ -199,7 +207,7 @@ export default function RoomsPage() {
           )}
           <button
             onClick={handleSignOut}
-            className="rounded-xl px-3 py-1.5 text-sm transition-colors"
+            className="rounded-xl px-3 py-2 text-sm"
             style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
           >
             Sign out
@@ -208,8 +216,8 @@ export default function RoomsPage() {
       </header>
 
       {/* Search */}
-      <div className="px-4 sm:px-6 pt-4 pb-2 shrink-0">
-        <div className="relative max-w-xl mx-auto">
+      <div className="px-4 pt-3 pb-2 shrink-0">
+        <div className="relative">
           <svg
             className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
             style={{ color: 'var(--text-muted)' }}
@@ -218,24 +226,23 @@ export default function RoomsPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
           </svg>
           <input
-            className="w-full rounded-xl pl-9 pr-4 py-2.5 text-sm outline-none transition-colors"
+            className="w-full rounded-xl pl-9 pr-4 py-3 outline-none"
             style={{
               background: 'var(--bg-surface)',
               border: '1px solid var(--border)',
               color: 'var(--text-primary)',
+              fontSize: '16px', // prevents iOS zoom
             }}
             placeholder="Search chats…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            onFocus={(e) => (e.currentTarget.style.borderColor = 'var(--border-focus)')}
-            onBlur={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
           />
         </div>
       </div>
 
       {/* Room list */}
-      <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-3 pb-24">
-        <ul className="max-w-xl mx-auto space-y-2">
+      <main className="flex-1 overflow-y-auto px-4 py-2 pb-28">
+        <ul className="space-y-2">
           {loadingRooms ? (
             <>
               <SkeletonRoom />
@@ -243,13 +250,13 @@ export default function RoomsPage() {
               <SkeletonRoom />
             </>
           ) : filtered.length === 0 ? (
-            <li className="text-center py-24">
+            <li className="flex flex-col items-center gap-4 py-24 text-center">
               {search ? (
                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
                   No chats match &ldquo;{search}&rdquo;
                 </p>
               ) : (
-                <div className="flex flex-col items-center gap-4">
+                <>
                   <div
                     className="w-16 h-16 rounded-full flex items-center justify-center text-3xl"
                     style={{ background: 'var(--accent-muted)' }}
@@ -261,32 +268,35 @@ export default function RoomsPage() {
                   </p>
                   <button
                     onClick={() => setShowNewDialog(true)}
-                    className="rounded-xl px-6 py-2.5 text-sm font-medium"
+                    className="rounded-xl px-6 py-3 text-sm font-medium"
                     style={{ background: 'var(--accent)', color: '#fff' }}
                   >
                     Start first chat
                   </button>
-                </div>
+                </>
               )}
             </li>
           ) : (
-            filtered.map((room) => (
-              <li
-                key={room.id}
-                className="flex items-center gap-3 rounded-2xl px-4 py-3 cursor-pointer select-none transition-colors"
-                style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)' }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface-hover)')}
-                onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--bg-surface)')}
-                /* click (desktop) */
-                onClick={() => handleRoomClick(room)}
-                /* long press */
-                onPointerDown={() => startPress(room)}
-                onPointerUp={cancelPress}
-                onPointerLeave={cancelPress}
+            <>{filtered.map((room) => (
+              <li key={room.id}>
+              <button
+                type="button"
+                className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 text-left"
+                style={{
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--border)',
+                  touchAction: 'manipulation',
+                  userSelect: 'none',
+                  WebkitUserSelect: 'none',
+                }}
+                onClick={() => onTap(room)}
+                onPointerDown={() => onPressStart(room)}
+                onPointerUp={onPressEnd}
+                onPointerCancel={onPressEnd}
                 onContextMenu={(e) => { e.preventDefault(); setRenameRoom(room); }}
               >
                 <div
-                  className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold shrink-0"
+                  className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold shrink-0"
                   style={{ background: 'var(--accent-muted)', color: 'var(--accent)' }}
                 >
                   {room.name.charAt(0).toUpperCase()}
@@ -306,8 +316,9 @@ export default function RoomsPage() {
                     </p>
                   )}
                 </div>
+              </button>
               </li>
-            ))
+            ))}</>
           )}
         </ul>
       </main>
@@ -315,14 +326,18 @@ export default function RoomsPage() {
       {/* FAB */}
       <button
         onClick={() => setShowNewDialog(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 rounded-full flex items-center justify-center text-2xl font-light transition-transform active:scale-90"
-        style={{ background: 'var(--accent)', color: '#fff', boxShadow: '0 4px 28px rgba(192,132,252,0.35)' }}
+        className="fixed bottom-6 right-6 w-14 h-14 rounded-full flex items-center justify-center text-2xl font-light active:scale-90 transition-transform"
+        style={{
+          background: 'var(--accent)',
+          color: '#fff',
+          boxShadow: '0 4px 28px rgba(192,132,252,0.4)',
+          touchAction: 'manipulation',
+        }}
         aria-label="New chat"
       >
         +
       </button>
 
-      {/* New chat dialog */}
       {showNewDialog && (
         <InputDialog
           title="New chat"
@@ -333,7 +348,6 @@ export default function RoomsPage() {
         />
       )}
 
-      {/* Rename dialog */}
       {renameRoom && (
         <InputDialog
           title="Rename chat"

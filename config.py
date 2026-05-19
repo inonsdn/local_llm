@@ -72,8 +72,8 @@ class Config:
     ChunkSize = 400
     ChunkOverlap = 50
 
-    ServerHost = '0.0.0.0'
-    ServerPort = 8000
+    ServerHost = os.environ.get( 'SERVER_HOST', '0.0.0.0' )
+    ServerPort = int( os.environ.get( 'SERVER_PORT', '8000' ) )
 
     CacheFilePath = os.path.join( os.getcwd(), 'message.json' )
     VectorDBPath = os.path.join( os.getcwd(), 'chroma_db' )

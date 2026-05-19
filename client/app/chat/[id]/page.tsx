@@ -40,7 +40,9 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
   }, [messages, loading]);
 
   useEffect(() => {
-    if (editingName) nameInputRef.current?.select();
+    if (editingName) {
+      setTimeout(() => nameInputRef.current?.select(), 50);
+    }
   }, [editingName]);
 
   async function saveName() {
@@ -57,7 +59,9 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
 
     setInput('');
     setLoading(true);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
 
     const userMsg = await appendMessage(id, 'user', text);
     setMessages((prev) => [...prev, userMsg]);
@@ -102,48 +106,48 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // only send on Enter without Shift on non-mobile (mobile Enter = newline is more natural)
+    if (e.key === 'Enter' && !e.shiftKey && window.innerWidth >= 640) {
       e.preventDefault();
       sendMessage();
     }
   }
 
-  function handleTextareaInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
+  function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setInput(e.target.value);
+    // auto grow
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
   }
 
   return (
     <div
-      className="flex flex-col h-screen"
+      className="flex flex-col h-full-screen"
       style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
       {/* Header */}
       <header
-        className="flex items-center gap-2 px-3 sm:px-4 py-3 shrink-0"
+        className="flex items-center gap-2 px-3 py-3 shrink-0"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         <button
           onClick={() => router.push('/')}
-          className="w-9 h-9 flex items-center justify-center rounded-xl transition-colors shrink-0 text-lg"
-          style={{ color: 'var(--text-secondary)' }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface)')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          className="w-10 h-10 flex items-center justify-center rounded-xl shrink-0 text-xl"
+          style={{ color: 'var(--text-secondary)', touchAction: 'manipulation' }}
         >
           ←
         </button>
 
-        {/* Editable room name */}
         <div className="flex-1 min-w-0">
           {editingName ? (
             <input
               ref={nameInputRef}
-              className="w-full text-base font-semibold bg-transparent outline-none"
+              className="w-full bg-transparent outline-none font-semibold"
               style={{
                 color: 'var(--text-primary)',
                 borderBottom: '1px solid var(--border-focus)',
                 paddingBottom: '2px',
+                fontSize: '16px', // prevents iOS zoom
               }}
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
@@ -155,15 +159,15 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
             />
           ) : (
             <button
-              className="flex items-center gap-1.5 group max-w-full text-left"
+              className="flex items-center gap-1.5 max-w-full text-left"
               onClick={() => setEditingName(true)}
-              title="Tap to rename"
+              style={{ touchAction: 'manipulation' }}
             >
               <span className="text-base font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
                 {room?.name ?? '…'}
               </span>
               <svg
-                className="w-3.5 h-3.5 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity"
+                className="w-3.5 h-3.5 shrink-0 opacity-40"
                 style={{ color: 'var(--text-muted)' }}
                 fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
               >
@@ -176,17 +180,19 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
 
         <button
           onClick={handleClear}
-          className="text-xs px-3 py-1.5 rounded-xl transition-colors shrink-0"
-          style={{ color: 'var(--text-muted)', border: '1px solid var(--border)' }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; e.currentTarget.style.borderColor = 'var(--danger)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border)'; }}
+          className="px-3 py-2 rounded-xl text-sm shrink-0"
+          style={{
+            color: 'var(--text-muted)',
+            border: '1px solid var(--border)',
+            touchAction: 'manipulation',
+          }}
         >
           Clear
         </button>
       </header>
 
       {/* Messages */}
-      <main className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3">
+      <main className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
         {messages.length === 0 && !loading && (
           <p className="text-center text-sm mt-20" style={{ color: 'var(--text-muted)' }}>
             Send a message to start chatting.
@@ -196,7 +202,7 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
         {messages.map((msg) => (
           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className="max-w-[82%] sm:max-w-[70%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed"
+              className="max-w-[85%] sm:max-w-[70%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed"
               style={
                 msg.role === 'user'
                   ? { background: 'var(--user-bubble)', color: '#f0e6ff', borderBottomRightRadius: '4px' }
@@ -230,24 +236,26 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
 
       {/* Input */}
       <footer
-        className="shrink-0 px-3 sm:px-6 py-3"
+        className="shrink-0 px-3 py-3"
         style={{ borderTop: '1px solid var(--border)' }}
       >
-        <div className="flex gap-2 max-w-3xl mx-auto items-end">
+        <div className="flex gap-2 items-end">
           <textarea
             ref={textareaRef}
-            className="flex-1 resize-none rounded-xl px-4 py-3 text-sm outline-none transition-colors"
+            className="flex-1 resize-none rounded-xl px-4 py-3 outline-none"
             style={{
               background: 'var(--bg-input)',
               border: '1px solid var(--border)',
               color: 'var(--text-primary)',
-              minHeight: '46px',
+              fontSize: '16px', // prevents iOS zoom
+              minHeight: '48px',
               maxHeight: '160px',
+              lineHeight: '1.5',
             }}
             rows={1}
             placeholder="Message…"
             value={input}
-            onChange={handleTextareaInput}
+            onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
             onFocus={(e) => (e.currentTarget.style.borderColor = 'var(--border-focus)')}
             onBlur={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
@@ -255,10 +263,13 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
           <button
             onClick={sendMessage}
             disabled={loading || !input.trim()}
-            className="rounded-xl px-4 py-3 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            style={{ background: 'var(--accent)', color: '#fff' }}
-            onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--accent-hover)'; }}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--accent)')}
+            className="rounded-xl px-4 text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            style={{
+              background: 'var(--accent)',
+              color: '#fff',
+              height: '48px',
+              touchAction: 'manipulation',
+            }}
           >
             Send
           </button>
