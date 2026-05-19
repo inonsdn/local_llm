@@ -11,6 +11,7 @@ import sys
 from config import Config
 from helpers import loadConfig, readFromJsonFile, writeToJsonFile
 import requests
+from supabase import create_client as createSupabaseClient
 
 ##############################
 #
@@ -97,9 +98,29 @@ class MessageCache:
         self.caches: dict[ dict ] = dict()
 
     def initialize( self ):
+        if self.config.SupabaseUrl and self.config.SupabaseKey:
+            self._loadFromSupabase()
+        else:
+            self._loadFromFile()
+
+    def _loadFromFile( self ):
         jsonDicts = readFromJsonFile( self.config.CacheFilePath )
         for jsonDict in jsonDicts:
-            msg = Message( jsonDict['role'], jsonDict['content'], jsonDict[ 'user_id' ], jsonDict[ 'room_id' ] )
+            msg = Message( jsonDict['role'], jsonDict['content'], jsonDict.get( 'user_id' ), jsonDict.get( 'room_id' ) )
+            self.add( msg )
+
+    def _loadFromSupabase( self ):
+        db = createSupabaseClient( self.config.SupabaseUrl, self.config.SupabaseKey )
+        # fetch all messages joined with their room to get user_id, ordered by creation time
+        result = (
+            db.from_( 'chat_messages' )
+            .select( 'id, room_id, role, content, created_at, chat_rooms(user_id)' )
+            .order( 'created_at', desc=False )
+            .execute()
+        )
+        for row in result.data:
+            userId = row['chat_rooms']['user_id'] if row.get( 'chat_rooms' ) else None
+            msg = Message( row['role'], row['content'], userId, row['room_id'] )
             self.add( msg )
 
     def add( self, msg: Message ):
@@ -133,6 +154,12 @@ class MessageCache:
                 jsonDicts.append( msg.asDict() )
         writeToJsonFile( self.config.CacheFilePath, jsonDicts )
 
+    def clear( self, userId, roomId ):
+        if userId not in self.caches:
+            return
+        if roomId not in self.caches[ userId ]:
+            return
+        self.caches[ userId ][ roomId ].clear()
 class OllamaRequestHandler:
 
     def __init__( self, config: Config ):
@@ -140,10 +167,6 @@ class OllamaRequestHandler:
         self.port = config.Port
         self.model = config.Model
         self.embeddedModel = config.EmbeddedModel
-
-    def initializeCaches( self, messageDicts ):
-        ...
-
 
     @property
     def chatUrl( self ):
@@ -154,6 +177,8 @@ class OllamaRequestHandler:
         return f'{self.host}:{self.port}/api/embeddings'
 
     def isPersonalFact( self, message: str ) -> bool:
+        ''' request prompt to ai for check that is this personal data fact
+        '''
         res = requests.post( self.chatUrl, json={
             'model': self.model,
             'messages': [{
@@ -169,7 +194,8 @@ class OllamaRequestHandler:
         return answer == 'YES'
 
     def getEmbeded( self, message: Message ) -> list[ float ]:
-        '''
+        ''' request to ai for embeded message to vector of meaning of it
+            result is meaning of message in float for use to compute in math
         '''
         response = requests.post( self.embeddedUrl, json={
             'model': self.embeddedModel,
@@ -178,24 +204,29 @@ class OllamaRequestHandler:
         return response.json()[ 'embedding' ]
 
     def getAIAnswer( self, message: Message, historicalMessages: list[ Message ] = None ) -> list[ float ]:
+        ''' request to ai of given message and historical message
         '''
-        '''
+        # init list of message data dict of historical if exists
         messages = list()
         if historicalMessages is not None:
             messages = list( map( lambda m: m.getRequestJson(), historicalMessages ) )
+        
+        # add current message into list
         messages.append( message.getRequestJson() )
+
+        # request to ai
         res = requests.post( self.chatUrl, json={
             'model': self.model,
             'messages': messages,
             'stream': False,
         })
 
+        # get response from packet
         responseData = res.json()
 
+        # handle when received error
         if 'error' in responseData:
             raise ValueError( responseData['error'] )
-
-        print( responseData )
 
         return responseData['message']
 
@@ -217,28 +248,37 @@ class AIHandler:
 
     def __init__( self, config: Config, ollamaRequestHandler: OllamaRequestHandler ):
 
+        # ai handler for request to
         self.handler = ollamaRequestHandler
 
+        # construct vector db conection and collection for access to documents
         self.dbClient = chromadb.PersistentClient( path = config.VectorDBPath )
         self.dbDocumentCollection = self.dbClient.get_or_create_collection( "documents" )
 
+        # construct message caches in memory for pass to ai which is historical data
         self.messageCaches = MessageCache( config )
         self.messageCaches.initialize()
 
-    def initialize( self ):
-        '''
-        '''
-
     def indexTextToDb( self, message: Message, source: str = 'unknown' ):
+        ''' store message into vector db for index text to using in retrive process of RAG
+            this will chunk message to a size for store into vector to prevent hallucinate 
+            when provide context to ai
 
+            store value is vector of embeded that will get from ai model in each documents
+        '''
         userId = message.userId
 
+        # loop over chunked message to embeded message and store into db
         for msgObj in message.chunkGenerator():
 
+            # embeded message from ai
             embededResults = self.handler.getEmbeded( msgObj )
 
+            # generate document id from source and user and content
+            #   this will refer when get and update
             documentId = getChunkId( userId, source, msgObj.content )
 
+            # update existing document
             if self.dbDocumentCollection.get( ids = [documentId,] )[ 'ids' ]:
                 self.dbDocumentCollection.update(
                     ids = [ documentId, ],
@@ -246,6 +286,7 @@ class AIHandler:
                     documents = [ msgObj.content, ],
                     metadatas=[ { 'source': source, 'user_id': userId, } ],
                 )
+            # create new document
             else:
                 self.dbDocumentCollection.add(
                     ids = [ documentId, ],
@@ -255,7 +296,8 @@ class AIHandler:
                 )
 
     def sendMessage( self, message: str, userId: str = None, roomId: str = None ):
-
+        '''
+        '''
         # construct message object
         msgObj = Message( 'user', message, userId, roomId )
 

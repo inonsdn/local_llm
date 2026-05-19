@@ -68,15 +68,18 @@ class ServerHandler:
             return res
 
         @self.app.post( '/clear' )
-        def clear( req: ChatRequest = None ):
-            self.aiHandler.messageCaches.clear()
+        def clear( req: ChatRequest ):
+            self.aiHandler.messageCaches.clear( userId=UUID( req.user_id ).bytes.hex(), roomId=UUID( req.room_id ).bytes.hex() )
             return { 'status': 'cleared' }
 
     def run( self ):
         uvicorn.run( self.app, host=self.config.ServerHost, port=self.config.ServerPort )
 
     def cacheMessage( self ):
-        jsonDicts = list( map( lambda m: m.asDict(), self.aiHandler.messageCaches ) )
+        jsonDicts = []
+        for roomToMsgs in self.aiHandler.messageCaches.caches.values():
+            for msgs in roomToMsgs.values():
+                jsonDicts.extend( m.asDict() for m in msgs )
         writeToJsonFile( self.config.CacheFilePath, jsonDicts )
 
 ##############################
@@ -95,7 +98,9 @@ if __name__ == '__main__':
     aiHandler = AIHandler( config, handler )
     server = ServerHandler( config, aiHandler )
     server.initRoutes()
+
     try:
         server.run()
-    except Exception:
+    finally:
+        print( 'Shutting down, saving cache...' )
         server.cacheMessage()
