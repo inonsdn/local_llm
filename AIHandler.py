@@ -12,11 +12,15 @@ from config import Config
 from helpers import loadConfig, readFromJsonFile, writeToJsonFile
 import requests
 from supabase import create_client as createSupabaseClient
+import logging
+import threading
 
 ##############################
 #
 # Global Variable
 #
+logger = logging.getLogger( __name__ )
+
 ChunkSize = 400
 ChunkOverlap = 50
 
@@ -104,24 +108,28 @@ class MessageCache:
             self._loadFromFile()
 
     def _loadFromFile( self ):
+        logger.info( 'loading message cache from file: %s', self.config.CacheFilePath )
         jsonDicts = readFromJsonFile( self.config.CacheFilePath )
         for jsonDict in jsonDicts:
             msg = Message( jsonDict['role'], jsonDict['content'], jsonDict.get( 'user_id' ), jsonDict.get( 'room_id' ) )
             self.add( msg )
+        logger.info( 'loaded %d messages from file', len( jsonDicts ) )
 
     def _loadFromSupabase( self ):
+        logger.info( 'loading message cache from Supabase' )
         db = createSupabaseClient( self.config.SupabaseUrl, self.config.SupabaseKey )
-        # fetch all messages joined with their room to get user_id, ordered by creation time
         result = (
             db.from_( 'chat_messages' )
             .select( 'id, room_id, role, content, created_at, chat_rooms(user_id)' )
-            .order( 'created_at', desc=False )
+            .order( 'created_at', desc=True )
+            .limit( 500 )
             .execute()
         )
-        for row in result.data:
+        for row in reversed( result.data ):
             userId = row['chat_rooms']['user_id'] if row.get( 'chat_rooms' ) else None
             msg = Message( row['role'], row['content'], userId, row['room_id'] )
             self.add( msg )
+        logger.info( 'loaded %d messages from Supabase', len( result.data ) )
 
     def add( self, msg: Message ):
         # self.messageCaches.append( msg )
@@ -149,17 +157,22 @@ class MessageCache:
 
     def toFile( self ):
         jsonDicts = []
-        for roomToMsg in self.caches.values():
-            for msg in roomToMsg.values():
-                jsonDicts.append( msg.asDict() )
+        for roomToMsgs in self.caches.values():
+            for msgs in roomToMsgs.values():
+                for msg in msgs:
+                    jsonDicts.append( msg.asDict() )
         writeToJsonFile( self.config.CacheFilePath, jsonDicts )
 
     def clear( self, userId, roomId ):
         if userId not in self.caches:
+            logger.debug( 'clear: no cache found for user=%s', userId )
             return
         if roomId not in self.caches[ userId ]:
+            logger.debug( 'clear: no cache found for user=%s room=%s', userId, roomId )
             return
+        count = len( self.caches[ userId ][ roomId ] )
         self.caches[ userId ][ roomId ].clear()
+        logger.info( 'cleared %d cached messages for user=%s room=%s', count, userId, roomId )
 class OllamaRequestHandler:
 
     def __init__( self, config: Config ):
@@ -190,7 +203,11 @@ class OllamaRequestHandler:
             }],
             'stream': False,
         })
-        answer = res.json()['message']['content'].strip().upper()
+        try:
+            answer = res.json()['message']['content'].strip().upper()
+        except Exception as e:
+            logger.error( 'isPersonalFact parse error: %s', e )
+            return False
         return answer == 'YES'
 
     def getEmbeded( self, message: Message ) -> list[ float ]:
@@ -226,6 +243,7 @@ class OllamaRequestHandler:
 
         # handle when received error
         if 'error' in responseData:
+            logger.error( 'Ollama error: %s', responseData['error'] )
             raise ValueError( responseData['error'] )
 
         return responseData['message']
@@ -248,14 +266,13 @@ class AIHandler:
 
     def __init__( self, config: Config, ollamaRequestHandler: OllamaRequestHandler ):
 
-        # ai handler for request to
         self.handler = ollamaRequestHandler
 
-        # construct vector db conection and collection for access to documents
+        logger.info( 'connecting to vector DB at %s', config.VectorDBPath )
         self.dbClient = chromadb.PersistentClient( path = config.VectorDBPath )
         self.dbDocumentCollection = self.dbClient.get_or_create_collection( "documents" )
+        logger.info( 'vector DB ready, %d documents indexed', self.dbDocumentCollection.count() )
 
-        # construct message caches in memory for pass to ai which is historical data
         self.messageCaches = MessageCache( config )
         self.messageCaches.initialize()
 
@@ -267,33 +284,20 @@ class AIHandler:
             store value is vector of embeded that will get from ai model in each documents
         '''
         userId = message.userId
+        logger.debug( 'indexing text for user=%s source=%s', userId, source )
 
-        # loop over chunked message to embeded message and store into db
         for msgObj in message.chunkGenerator():
 
-            # embeded message from ai
             embededResults = self.handler.getEmbeded( msgObj )
-
-            # generate document id from source and user and content
-            #   this will refer when get and update
             documentId = getChunkId( userId, source, msgObj.content )
+            logger.debug( 'upserting chunk %s', documentId )
 
-            # update existing document
-            if self.dbDocumentCollection.get( ids = [documentId,] )[ 'ids' ]:
-                self.dbDocumentCollection.update(
-                    ids = [ documentId, ],
-                    embeddings = [ embededResults, ],
-                    documents = [ msgObj.content, ],
-                    metadatas=[ { 'source': source, 'user_id': userId, } ],
-                )
-            # create new document
-            else:
-                self.dbDocumentCollection.add(
-                    ids = [ documentId, ],
-                    embeddings = [ embededResults, ],
-                    documents = [ msgObj.content, ],
-                    metadatas=[ { 'source': source, 'user_id': userId, } ],
-                )
+            self.dbDocumentCollection.upsert(
+                ids = [ documentId, ],
+                embeddings = [ embededResults, ],
+                documents = [ msgObj.content, ],
+                metadatas=[ { 'source': source, 'user_id': userId, } ],
+            )
 
     def sendMessage( self, message: str, userId: str = None, roomId: str = None ):
         '''
@@ -304,32 +308,35 @@ class AIHandler:
         # get embeded vector dimension score from given message
         embededResults = self.handler.getEmbeded( msgObj )
 
-        # compute to get context that related to given message
-        #   using embeded value and in db if there is exists
         if self.dbDocumentCollection.count() != 0:
-            # get context from db with embeded value
             relatedEmbededDicts = self.dbDocumentCollection.query(
                 query_embeddings = [ embededResults, ],
                 n_results=min( 3, self.dbDocumentCollection.count() ),
                 where={ 'user_id': userId, }
             )
-
-            # get list of context that related and construct and set to message
             mostRelatedContexts = relatedEmbededDicts[ 'documents' ][ 0 ]
+            logger.debug( 'RAG retrieved %d context chunks for user=%s', len( mostRelatedContexts ), userId )
             mostRelatedContextsStr = '\n\n'.join( mostRelatedContexts )
             msgObj.setAugmentedContext( mostRelatedContextsStr )
 
+        logger.info( 'sending message user=%s room=%s', userId, roomId )
         try:
             resultMessage = self.handler.getAIAnswer( msgObj, self.messageCaches.getMessageCache( userId, roomId ) )
-        except ValueError:
+        except ValueError as e:
+            logger.error( 'AI returned error for user=%s room=%s: %s', userId, roomId, e )
             resultMessage = { 'error': 'Something error' }
         else:
+            logger.debug( 'AI response received for user=%s room=%s', userId, roomId )
             self.messageCaches.add( msgObj )
             assistantMsg = Message( 'assistant', resultMessage['content'], userId, roomId )
             self.messageCaches.add( assistantMsg )
 
-            if self.handler.isPersonalFact( msgObj.content ):
-                self.indexTextToDb( msgObj, source='user' )
+            def _indexIfPersonalFact( msg ):
+                logger.debug( 'checking personal fact for user=%s', userId )
+                if self.handler.isPersonalFact( msg.content ):
+                    logger.info( 'indexing personal fact for user=%s', userId )
+                    self.indexTextToDb( msg, source='user' )
+            threading.Thread( target=_indexIfPersonalFact, args=( msgObj, ), daemon=True ).start()
 
         return resultMessage
 

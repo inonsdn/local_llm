@@ -52,7 +52,7 @@ export async function createRoom(name: string): Promise<ChatRoom> {
   return data;
 }
 
-export async function updateRoom(id: string, patch: Partial<Pick<ChatRoom, 'preview' | 'last_message_at'>>): Promise<void> {
+export async function updateRoom(id: string, patch: Partial<Pick<ChatRoom, 'preview' | 'last_message_at' | 'name'>>): Promise<void> {
   const supabase = createClient();
   const { error } = await supabase.from('chat_rooms').update(patch).eq('id', id);
   if (error) throw error;

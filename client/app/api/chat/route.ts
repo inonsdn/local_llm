@@ -14,7 +14,10 @@ export async function POST(req: NextRequest) {
 
   const res = await fetch(`${AI_URL}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Api-Key': process.env.INTERNAL_API_KEY ?? '',
+    },
     body: JSON.stringify({ message, user_id: user.id, room_id }),
   });
 
@@ -37,7 +40,10 @@ export async function DELETE(req: NextRequest) {
 
   const res = await fetch(`${AI_URL}/clear`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Api-Key': process.env.INTERNAL_API_KEY ?? '',
+    },
     body: JSON.stringify({ user_id: user.id, room_id }),
   });
 

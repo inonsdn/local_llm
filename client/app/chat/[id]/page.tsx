@@ -20,12 +20,17 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     getRoom(id).then((r) => {
       if (!r) { router.replace('/'); return; }
       setRoom(r);
+      setNameInput(r.name);
     });
     getMessages(id).then(setMessages).catch(console.error);
   }, [id, router]);
@@ -34,12 +39,25 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  useEffect(() => {
+    if (editingName) nameInputRef.current?.select();
+  }, [editingName]);
+
+  async function saveName() {
+    const name = nameInput.trim();
+    setEditingName(false);
+    if (!name || !room || name === room.name) return;
+    await updateRoom(id, { name });
+    setRoom((r) => r ? { ...r, name } : r);
+  }
+
   async function sendMessage() {
     const text = input.trim();
     if (!text || loading || !room) return;
 
     setInput('');
     setLoading(true);
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     const userMsg = await appendMessage(id, 'user', text);
     setMessages((prev) => [...prev, userMsg]);
@@ -90,45 +108,100 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
     }
   }
 
+  function handleTextareaInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setInput(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+  }
+
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-gray-100">
-      <header className="flex items-center gap-3 px-4 py-4 border-b border-gray-800 shrink-0">
+    <div
+      className="flex flex-col h-screen"
+      style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}
+    >
+      {/* Header */}
+      <header
+        className="flex items-center gap-2 px-3 sm:px-4 py-3 shrink-0"
+        style={{ borderBottom: '1px solid var(--border)' }}
+      >
         <button
           onClick={() => router.push('/')}
-          className="text-gray-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-gray-800"
-          title="Back"
+          className="w-9 h-9 flex items-center justify-center rounded-xl transition-colors shrink-0 text-lg"
+          style={{ color: 'var(--text-secondary)' }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-surface)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
         >
           ←
         </button>
-        <h1 className="flex-1 text-base font-semibold tracking-tight truncate">
-          {room?.name ?? '…'}
-        </h1>
+
+        {/* Editable room name */}
+        <div className="flex-1 min-w-0">
+          {editingName ? (
+            <input
+              ref={nameInputRef}
+              className="w-full text-base font-semibold bg-transparent outline-none"
+              style={{
+                color: 'var(--text-primary)',
+                borderBottom: '1px solid var(--border-focus)',
+                paddingBottom: '2px',
+              }}
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onBlur={saveName}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveName();
+                if (e.key === 'Escape') { setEditingName(false); setNameInput(room?.name ?? ''); }
+              }}
+            />
+          ) : (
+            <button
+              className="flex items-center gap-1.5 group max-w-full text-left"
+              onClick={() => setEditingName(true)}
+              title="Tap to rename"
+            >
+              <span className="text-base font-semibold truncate" style={{ color: 'var(--text-primary)' }}>
+                {room?.name ?? '…'}
+              </span>
+              <svg
+                className="w-3.5 h-3.5 shrink-0 opacity-0 group-hover:opacity-60 transition-opacity"
+                style={{ color: 'var(--text-muted)' }}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z" />
+              </svg>
+            </button>
+          )}
+        </div>
+
         <button
           onClick={handleClear}
-          className="text-sm text-gray-400 hover:text-white transition-colors"
+          className="text-xs px-3 py-1.5 rounded-xl transition-colors shrink-0"
+          style={{ color: 'var(--text-muted)', border: '1px solid var(--border)' }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger)'; e.currentTarget.style.borderColor = 'var(--danger)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border)'; }}
         >
           Clear
         </button>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
-        {messages.length === 0 && (
-          <p className="text-center text-gray-600 mt-20 text-sm">
+      {/* Messages */}
+      <main className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-3">
+        {messages.length === 0 && !loading && (
+          <p className="text-center text-sm mt-20" style={{ color: 'var(--text-muted)' }}>
             Send a message to start chatting.
           </p>
         )}
 
         {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className={`max-w-[75%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${
+              className="max-w-[82%] sm:max-w-[70%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed"
+              style={
                 msg.role === 'user'
-                  ? 'bg-blue-600 text-white rounded-br-sm'
-                  : 'bg-gray-800 text-gray-100 rounded-bl-sm'
-              }`}
+                  ? { background: 'var(--user-bubble)', color: '#f0e6ff', borderBottomRightRadius: '4px' }
+                  : { background: 'var(--ai-bubble)', color: 'var(--text-primary)', borderBottomLeftRadius: '4px', border: '1px solid var(--border)' }
+              }
             >
               {msg.content}
             </div>
@@ -137,10 +210,17 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
 
         {loading && (
           <div className="flex justify-start">
-            <div className="bg-gray-800 rounded-2xl rounded-bl-sm px-4 py-3 flex gap-1 items-center">
-              <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:0ms]" />
-              <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:150ms]" />
-              <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:300ms]" />
+            <div
+              className="rounded-2xl px-4 py-3 flex gap-1.5 items-center"
+              style={{ background: 'var(--ai-bubble)', border: '1px solid var(--border)', borderBottomLeftRadius: '4px' }}
+            >
+              {[0, 150, 300].map((delay) => (
+                <span
+                  key={delay}
+                  className="w-2 h-2 rounded-full animate-bounce"
+                  style={{ background: 'var(--text-muted)', animationDelay: `${delay}ms` }}
+                />
+              ))}
             </div>
           </div>
         )}
@@ -148,20 +228,37 @@ export default function ChatRoomPage({ params }: { params: Promise<{ id: string 
         <div ref={bottomRef} />
       </main>
 
-      <footer className="shrink-0 border-t border-gray-800 px-4 py-4">
-        <div className="flex gap-3 max-w-3xl mx-auto">
+      {/* Input */}
+      <footer
+        className="shrink-0 px-3 sm:px-6 py-3"
+        style={{ borderTop: '1px solid var(--border)' }}
+      >
+        <div className="flex gap-2 max-w-3xl mx-auto items-end">
           <textarea
-            className="flex-1 resize-none rounded-xl bg-gray-800 border border-gray-700 px-4 py-3 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+            ref={textareaRef}
+            className="flex-1 resize-none rounded-xl px-4 py-3 text-sm outline-none transition-colors"
+            style={{
+              background: 'var(--bg-input)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-primary)',
+              minHeight: '46px',
+              maxHeight: '160px',
+            }}
             rows={1}
-            placeholder="Message… (Enter to send, Shift+Enter for newline)"
+            placeholder="Message…"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={handleTextareaInput}
             onKeyDown={handleKeyDown}
+            onFocus={(e) => (e.currentTarget.style.borderColor = 'var(--border-focus)')}
+            onBlur={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
           />
           <button
             onClick={sendMessage}
             disabled={loading || !input.trim()}
-            className="rounded-xl bg-blue-600 px-5 py-3 text-sm font-medium hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="rounded-xl px-4 py-3 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            style={{ background: 'var(--accent)', color: '#fff' }}
+            onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--accent-hover)'; }}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--accent)')}
           >
             Send
           </button>

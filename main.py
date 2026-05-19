@@ -5,17 +5,18 @@
 import argparse
 from dataclasses import dataclass
 import importlib.util
+import logging
+import logging.config
 import sys
 from uuid import UUID
 from AIHandler import AIHandler, OllamaRequestHandler
 from config import Config
 import json
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Depends
 
 from pydantic import BaseModel
 
-import requests
 
 import uvicorn
 
@@ -23,6 +24,8 @@ import uvicorn
 #
 # Global Variable
 #
+logger = logging.getLogger( __name__ )
+
 ##############################
 #
 # Helpers Funciton
@@ -62,14 +65,38 @@ class ServerHandler:
 
     def initRoutes( self ):
 
+        apiKey = self.config.InternalApiKey
+
+        def verifyApiKey( x_api_key: str = Header( default='' ) ):
+            if apiKey and x_api_key != apiKey:
+                logger.warning( 'Rejected request with invalid API key' )
+                raise HTTPException( status_code=401, detail='Invalid API key' )
+
+        def parseUUID( value: str | None, field: str ) -> str:
+            if not value:
+                logger.warning( 'Missing required field: %s', field )
+                raise HTTPException( status_code=422, detail=f'{field} is required' )
+            try:
+                return UUID( value ).bytes.hex()
+            except ( ValueError, AttributeError ):
+                logger.warning( 'Invalid UUID for field %s: %r', field, value )
+                raise HTTPException( status_code=422, detail=f'Invalid {field}' )
+
         @self.app.post( '/chat' )
-        def chat( req: ChatRequest ):
-            res = self.aiHandler.sendMessage( req.message, userId=UUID( req.user_id ).bytes.hex(), roomId=UUID( req.room_id ).bytes.hex() )
+        def chat( req: ChatRequest, _: None = Depends( verifyApiKey ) ):
+            userId = parseUUID( req.user_id, 'user_id' )
+            roomId = parseUUID( req.room_id, 'room_id' )
+            logger.info( 'chat request user=%s room=%s', userId, roomId )
+            res = self.aiHandler.sendMessage( req.message, userId=userId, roomId=roomId )
+            logger.debug( 'chat response user=%s room=%s', userId, roomId )
             return res
 
         @self.app.post( '/clear' )
-        def clear( req: ChatRequest ):
-            self.aiHandler.messageCaches.clear( userId=UUID( req.user_id ).bytes.hex(), roomId=UUID( req.room_id ).bytes.hex() )
+        def clear( req: ChatRequest, _: None = Depends( verifyApiKey ) ):
+            userId = parseUUID( req.user_id, 'user_id' )
+            roomId = parseUUID( req.room_id, 'room_id' )
+            logger.info( 'clear cache user=%s room=%s', userId, roomId )
+            self.aiHandler.messageCaches.clear( userId=userId, roomId=roomId )
             return { 'status': 'cleared' }
 
     def run( self ):
@@ -81,6 +108,7 @@ class ServerHandler:
             for msgs in roomToMsgs.values():
                 jsonDicts.extend( m.asDict() for m in msgs )
         writeToJsonFile( self.config.CacheFilePath, jsonDicts )
+        logger.info( 'cache saved: %d messages -> %s', len( jsonDicts ), self.config.CacheFilePath )
 
 ##############################
 #
@@ -94,6 +122,12 @@ if __name__ == '__main__':
 
     config = loadConfig( args.configFile )
 
+    from config import LoggingConfig
+    logging.config.dictConfig( LoggingConfig.ConfigDict )
+
+    logger.info( 'Starting server on %s:%s', config.ServerHost, config.ServerPort )
+    logger.info( 'Supabase enabled: %s', bool( config.SupabaseUrl ) )
+
     handler = OllamaRequestHandler( config )
     aiHandler = AIHandler( config, handler )
     server = ServerHandler( config, aiHandler )
@@ -102,5 +136,5 @@ if __name__ == '__main__':
     try:
         server.run()
     finally:
-        print( 'Shutting down, saving cache...' )
+        logger.info( 'Shutting down, saving cache...' )
         server.cacheMessage()
