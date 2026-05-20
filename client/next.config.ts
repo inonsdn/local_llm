@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
       // Polyfill __dirname and __filename for CJS packages running in ESM context
       config.plugins = config.plugins || [];
       config.node = {
-        // __dirname: true,
+        __dirname: true,
         __filename: true,
       };
     }
