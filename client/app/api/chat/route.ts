@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
-const AI_URL = `http://${process.env.AI_HOST}:${process.env.AI_PORT}`;
+const AI_URL = `${process.env.AI_HOST}:${process.env.AI_PORT}`;
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
