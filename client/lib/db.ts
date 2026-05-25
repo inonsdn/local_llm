@@ -95,3 +95,59 @@ export async function clearMessages(roomId: string): Promise<void> {
   const { error } = await supabase.from('chat_messages').delete().eq('room_id', roomId);
   if (error) throw error;
 }
+
+export interface ImageJob {
+  job_id: string;
+  user_id: string;
+  prompt: string;
+  negative: string | null;
+  status: 'pending' | 'done' | 'error';
+  image_count: number;
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export async function getImageJobs(): Promise<ImageJob[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('image_jobs')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function insertImageJob(
+  jobId: string,
+  prompt: string,
+  negative: string | null,
+): Promise<ImageJob> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
+    .from('image_jobs')
+    .insert({ job_id: jobId, user_id: user.id, prompt, negative, status: 'pending' })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateImageJob(
+  jobId: string,
+  patch: Partial<Pick<ImageJob, 'status' | 'image_count' | 'error' | 'completed_at'>>,
+): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from('image_jobs').update(patch).eq('job_id', jobId);
+  if (error) throw error;
+}
+
+export async function deleteImageJob(jobId: string): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from('image_jobs').delete().eq('job_id', jobId);
+  if (error) throw error;
+}
