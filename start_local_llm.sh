@@ -1,34 +1,63 @@
 #!/bin/bash
+#
+# Start ollama with the model, then start the FastAPI service that talks to it.
+#
+set -euo pipefail
 
-SESSION="local_llm"
+cd "$( dirname "$0" )"
 
-tmux kill-session -t $SESSION 2>/dev/null
+MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+OLLAMA_URL="${OLLAMA_HOST:-http://127.0.0.1}:${OLLAMA_PORT:-11434}"
+VENV="${VENV:-venv}"
 
-tmux new-session -d -s $SESSION
+OLLAMA_PID=''
 
-# window 0 - ollama
-tmux rename-window -t $SESSION:0 'ollama'
+cleanup() {
+    if [ -n "$OLLAMA_PID" ]; then
+        echo "==> stopping ollama ( pid $OLLAMA_PID )"
+        kill "$OLLAMA_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
 
-tmux send-keys -t $SESSION:0 '
-ollama serve
-' C-m
+command -v ollama >/dev/null || { echo "ollama is not installed"; exit 1; }
 
-# window 1 - api server
-tmux new-window -t $SESSION -n 'api'
+##############################
+#
+# ollama
+#
+if curl -sf "$OLLAMA_URL" >/dev/null 2>&1; then
+    echo "==> ollama already running at $OLLAMA_URL"
+else
+    echo "==> starting ollama, logs -> ollama.log"
+    ollama serve >ollama.log 2>&1 &
+    OLLAMA_PID=$!
 
-tmux send-keys -t $SESSION:1 '
-cd ~/Work/local_llm &&
-export PYTHONPATH=venv3.12/lib/python3.12/site-packages
-source venv3.12/bin/activate &&
-python3 main.py config.py
-' C-m
+    for _ in $( seq 30 ); do
+        curl -sf "$OLLAMA_URL" >/dev/null 2>&1 && break
+        sleep 1
+    done
 
+    curl -sf "$OLLAMA_URL" >/dev/null 2>&1 || { echo "ollama did not start, see ollama.log"; exit 1; }
+fi
 
-# window 2 - cloudfare tunnle
-tmux new-window -t $SESSION -n 'cloudfare'
+if ollama list | awk '{ print $1 }' | grep -qx "$MODEL"; then
+    echo "==> model $MODEL already pulled"
+else
+    echo "==> pulling model $MODEL"
+    ollama pull "$MODEL"
+fi
 
-tmux send-keys -t $SESSION:2 '
-cloudflared tunnel --url http://localhost:8000
-' C-m
+##############################
+#
+# api service
+#
+if [ ! -d "$VENV" ]; then
+    echo "==> creating virtualenv $VENV"
+    python3 -m venv "$VENV"
+    "$VENV/bin/pip" install -q -r requirements.txt
+fi
 
-tmux attach -t $SESSION
+echo "==> starting API on ${SERVER_HOST:-0.0.0.0}:${SERVER_PORT:-8000} with model $MODEL"
+# not exec, so the trap above can stop ollama when the API stops
+OLLAMA_MODEL="$MODEL" "$VENV/bin/python" main.py

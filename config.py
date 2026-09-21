@@ -6,11 +6,6 @@ import os
 
 ##############################
 #
-# Global Variable
-#
-
-##############################
-#
 # Class
 #
 class LoggingConfig:
@@ -30,56 +25,23 @@ class LoggingConfig:
                 'formatter': 'standard',
                 'stream': 'ext://sys.stdout',
             },
-            'file': {
-                'class': 'logging.handlers.RotatingFileHandler',
-                'formatter': 'standard',
-                'filename': 'server.log',
-                'maxBytes': 10 * 1024 * 1024,  # 10 MB
-                'backupCount': 3,
-                'encoding': 'utf-8',
-            },
-        },
-        'loggers': {
-            'AIHandler': {
-                'level': 'DEBUG',
-                'handlers': [ 'console', 'file' ],
-                'propagate': False,
-            },
-            'main': {
-                'level': 'DEBUG',
-                'handlers': [ 'console', 'file' ],
-                'propagate': False,
-            },
-            'helpers': {
-                'level': 'DEBUG',
-                'handlers': [ 'console', 'file' ],
-                'propagate': False,
-            },
         },
         'root': {
-            'level': 'WARNING',
+            'level': 'INFO',
             'handlers': [ 'console' ],
         },
     }
+
 class Config:
 
-    Host = 'http://127.0.0.1'
-    Port = 11434
+    # ollama service
+    Host = os.environ.get( 'OLLAMA_HOST', 'http://127.0.0.1' )
+    Port = int( os.environ.get( 'OLLAMA_PORT', '11434' ) )
+    Model = os.environ.get( 'OLLAMA_MODEL', 'qwen2.5-coder:7b' )
 
-    Model = 'qwen2.5-coder:7b'
-    EmbeddedModel = 'nomic-embed-text'
-
-    ChunkSize = 400
-    ChunkOverlap = 50
-
+    # this fastapi service
     ServerHost = os.environ.get( 'SERVER_HOST', '0.0.0.0' )
     ServerPort = int( os.environ.get( 'SERVER_PORT', '8000' ) )
 
-    CacheFilePath = os.path.join( os.getcwd(), 'message.json' )
-    VectorDBPath = os.path.join( os.getcwd(), 'chroma_db' )
-
-    SupabaseUrl = os.environ.get( 'SUPABASE_URL', '' )
-    SupabaseKey = os.environ.get( 'SUPABASE_SERVICE_ROLE_KEY', '' )
-
-    InternalApiKey = os.environ.get( 'INTERNAL_API_KEY', '' )
-
+    # how many messages of a room are replayed back to the model
+    HistoryLimit = int( os.environ.get( 'HISTORY_LIMIT', '20' ) )
