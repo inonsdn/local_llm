@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const { prompt, negative, seed } = await req.json();
+  const { prompt, negative, seed, character_id } = await req.json();
   if (!prompt || typeof prompt !== 'string') {
     return NextResponse.json({ error: 'prompt required' }, { status: 422 });
   }
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
       'Content-Type': 'application/json',
       'X-Api-Key': process.env.INTERNAL_API_KEY ?? '',
     },
-    body: JSON.stringify({ prompt, negative, seed, user_id: user.id }),
+    body: JSON.stringify({ prompt, negative, seed, user_id: user.id, character_id }),
   });
 
   if (!res.ok) {

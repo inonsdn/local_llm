@@ -206,6 +206,13 @@ export default function RoomsPage() {
             </span>
           )}
           <button
+            onClick={() => router.push('/characters')}
+            className="rounded-xl px-3 py-2 text-sm"
+            style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >
+            Characters
+          </button>
+          <button
             onClick={() => router.push('/images')}
             className="rounded-xl px-3 py-2 text-sm"
             style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)' }}

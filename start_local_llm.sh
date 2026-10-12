@@ -18,16 +18,27 @@ tmux new-window -t $SESSION -n 'api'
 
 tmux send-keys -t $SESSION:1 '
 cd ~/Work/local_llm &&
-export PYTHONPATH=venv3.12/lib/python3.12/site-packages
+unset PYTHONPATH &&
 source venv3.12/bin/activate &&
 python3 main.py config.py
 ' C-m
 
 
-# window 2 - cloudfare tunnle
-tmux new-window -t $SESSION -n 'cloudfare'
+# window 2 - comfyui (image generation)
+tmux new-window -t $SESSION -n 'comfy'
 
 tmux send-keys -t $SESSION:2 '
+cd ~/Work/local_llm/ &&
+unset PYTHONPATH &&
+source venv3.12/bin/activate &&
+cd ComfyUI/ &&
+python main.py --listen 127.0.0.1 --port 8188
+' C-m
+
+# window 3 - cloudfare tunnle
+tmux new-window -t $SESSION -n 'cloudfare'
+
+tmux send-keys -t $SESSION:3 '
 cloudflared tunnel --url http://localhost:8000
 ' C-m
 

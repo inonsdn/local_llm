@@ -101,6 +101,7 @@ export interface ImageJob {
   user_id: string;
   prompt: string;
   negative: string | null;
+  seed: number | null;
   status: 'pending' | 'done' | 'error';
   image_count: number;
   error: string | null;
@@ -123,6 +124,7 @@ export async function insertImageJob(
   jobId: string,
   prompt: string,
   negative: string | null,
+  seed: number | null,
 ): Promise<ImageJob> {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -130,7 +132,7 @@ export async function insertImageJob(
 
   const { data, error } = await supabase
     .from('image_jobs')
-    .insert({ job_id: jobId, user_id: user.id, prompt, negative, status: 'pending' })
+    .insert({ job_id: jobId, user_id: user.id, prompt, negative, seed, status: 'pending' })
     .select()
     .single();
   if (error) throw error;
@@ -149,5 +151,49 @@ export async function updateImageJob(
 export async function deleteImageJob(jobId: string): Promise<void> {
   const supabase = createClient();
   const { error } = await supabase.from('image_jobs').delete().eq('job_id', jobId);
+  if (error) throw error;
+}
+
+export interface Character {
+  id: string;
+  user_id: string;
+  name: string;
+  ref_count: number;
+  created_at: string;
+}
+
+export async function getCharacters(): Promise<Character[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('characters')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function insertCharacter(name: string): Promise<Character> {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
+    .from('characters')
+    .insert({ name: name.trim() || 'Untitled', user_id: user.id })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateCharacterRefCount(id: string, refCount: number): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from('characters').update({ ref_count: refCount }).eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteCharacter(id: string): Promise<void> {
+  const supabase = createClient();
+  const { error } = await supabase.from('characters').delete().eq('id', id);
   if (error) throw error;
 }

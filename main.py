@@ -3,22 +3,21 @@
 # Standart Import
 #
 import argparse
-from dataclasses import dataclass
 import importlib.util
 import logging
 import logging.config
-import sys
+import os
 from uuid import UUID
 from AIHandler import AIHandler, OllamaRequestHandler
 from config import Config
 import json
-import requests
 from fastapi import FastAPI, Header, HTTPException, Depends
 
 from pydantic import BaseModel
 
-
 import uvicorn
+
+from plugin_api import PluginContext, loadPlugins
 
 ##############################
 #
@@ -44,6 +43,26 @@ def loadConfig( configPath ):
     spec.loader.exec_module( module )
     return module.Config
 
+def makeVerifyApiKey( apiKey ):
+    ''' build the auth dependency once, share it with core routes and plugins
+        so every endpoint enforces the same key.
+    '''
+    def verifyApiKey( x_api_key: str = Header( default='' ) ):
+        if apiKey and x_api_key != apiKey:
+            logger.warning( 'Rejected request with invalid API key' )
+            raise HTTPException( status_code=401, detail='Invalid API key' )
+    return verifyApiKey
+
+def parseUUID( value: str | None, field: str ) -> str:
+    if not value:
+        logger.warning( 'Missing required field: %s', field )
+        raise HTTPException( status_code=422, detail=f'{field} is required' )
+    try:
+        return UUID( value ).bytes.hex()
+    except ( ValueError, AttributeError ):
+        logger.warning( 'Invalid UUID for field %s: %r', field, value )
+        raise HTTPException( status_code=422, detail=f'Invalid {field}' )
+
 ##############################
 #
 # Class
@@ -54,33 +73,26 @@ class ChatRequest( BaseModel ):
     room_id: str | None = None
 
 class ServerHandler:
+    ''' core server. base functionality is chat with the LLM ( + clearing it ).
+        every other capability ( image generation, interrogation, ... ) is loaded
+        from the plugins/ directory at startup, if present.
+    '''
 
     def __init__( self, config, aiHandler: AIHandler ):
         self.app = FastAPI()
         self.config = config
         self.aiHandler = aiHandler
+        self.verifyApiKey = makeVerifyApiKey( config.InternalApiKey )
+        self.pluginNames = []
+        self.shutdownHooks = []
 
     def initialize( self ):
-        self.initRoutes()
+        self.initCoreRoutes()
+        self.initPlugins()
 
-    def initRoutes( self ):
+    def initCoreRoutes( self ):
 
-        apiKey = self.config.InternalApiKey
-
-        def verifyApiKey( x_api_key: str = Header( default='' ) ):
-            if apiKey and x_api_key != apiKey:
-                logger.warning( 'Rejected request with invalid API key' )
-                raise HTTPException( status_code=401, detail='Invalid API key' )
-
-        def parseUUID( value: str | None, field: str ) -> str:
-            if not value:
-                logger.warning( 'Missing required field: %s', field )
-                raise HTTPException( status_code=422, detail=f'{field} is required' )
-            try:
-                return UUID( value ).bytes.hex()
-            except ( ValueError, AttributeError ):
-                logger.warning( 'Invalid UUID for field %s: %r', field, value )
-                raise HTTPException( status_code=422, detail=f'Invalid {field}' )
+        verifyApiKey = self.verifyApiKey
 
         @self.app.post( '/chat' )
         def chat( req: ChatRequest, _: None = Depends( verifyApiKey ) ):
@@ -99,6 +111,25 @@ class ServerHandler:
             self.aiHandler.messageCaches.clear( userId=userId, roomId=roomId )
             return { 'status': 'cleared' }
 
+        @self.app.get( '/plugins' )
+        def listPlugins( _: None = Depends( verifyApiKey ) ):
+            return { 'core': [ 'chat', 'clear' ], 'plugins': self.pluginNames }
+
+    def initPlugins( self ):
+        ctx = PluginContext(
+            app=self.app,
+            config=self.config,
+            aiHandler=self.aiHandler,
+            verifyApiKey=self.verifyApiKey,
+            parseUUID=parseUUID,
+        )
+        ctx.provide( 'aiHandler', self.aiHandler )
+
+        pluginsDir = os.path.join( os.path.dirname( os.path.abspath( __file__ ) ), 'plugins' )
+        self.pluginNames = loadPlugins( pluginsDir, ctx )
+        self.shutdownHooks = ctx.shutdownHooks
+        logger.info( 'plugins loaded: %s', self.pluginNames or '(none)' )
+
     def run( self ):
         uvicorn.run( self.app, host=self.config.ServerHost, port=self.config.ServerPort )
 
@@ -109,6 +140,13 @@ class ServerHandler:
                 jsonDicts.extend( m.asDict() for m in msgs )
         writeToJsonFile( self.config.CacheFilePath, jsonDicts )
         logger.info( 'cache saved: %d messages -> %s', len( jsonDicts ), self.config.CacheFilePath )
+
+    def runShutdownHooks( self ):
+        for fn in self.shutdownHooks:
+            try:
+                fn()
+            except Exception as e:
+                logger.error( 'shutdown hook failed: %s', e )
 
 ##############################
 #
@@ -131,10 +169,11 @@ if __name__ == '__main__':
     handler = OllamaRequestHandler( config )
     aiHandler = AIHandler( config, handler )
     server = ServerHandler( config, aiHandler )
-    server.initRoutes()
+    server.initialize()
 
     try:
         server.run()
     finally:
         logger.info( 'Shutting down, saving cache...' )
         server.cacheMessage()
+        server.runShutdownHooks()

@@ -7,7 +7,9 @@ import {
   insertImageJob,
   updateImageJob,
   deleteImageJob,
+  getCharacters,
   type ImageJob,
+  type Character,
 } from '@/lib/db';
 
 interface JobStatusResponse {
@@ -31,10 +33,12 @@ function JobTile({
   job,
   onDelete,
   onStatusChange,
+  onReuseSeed,
 }: {
   job: ImageJob;
   onDelete: (jobId: string) => void;
   onStatusChange: (jobId: string, patch: Partial<ImageJob>) => void;
+  onReuseSeed: (seed: number) => void;
 }) {
   const [status, setStatus] = useState<JobStatusResponse>({
     status: job.status,
@@ -133,11 +137,24 @@ function JobTile({
         >
           {job.prompt}
         </p>
-        <div className="flex items-center justify-between">
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
             {timeAgo(job.created_at)}
+            {job.seed != null && (
+              <>
+                {' · '}
+                <button
+                  onClick={() => onReuseSeed(job.seed!)}
+                  className="underline"
+                  style={{ color: 'var(--text-muted)' }}
+                  title="Click to reuse this seed"
+                >
+                  seed {job.seed}
+                </button>
+              </>
+            )}
           </span>
-          <div className="flex gap-1">
+          <div className="flex gap-1 shrink-0">
             {imageUrl && (
               <a
                 href={imageUrl}
@@ -169,13 +186,21 @@ export default function ImagesPage() {
   const [prompt, setPrompt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [characters, setCharacters] = useState<Character[]>([]);
+  const [characterId, setCharacterId] = useState<string>('');
+  const [negative, setNegative] = useState('');
+  const [seedInput, setSeedInput] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [interrogating, setInterrogating] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const interrogateInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getImageJobs()
       .then(setJobs)
       .catch(console.error)
       .finally(() => setLoading(false));
+    getCharacters().then(setCharacters).catch(console.error);
   }, []);
 
   const handleGenerate = useCallback(async () => {
@@ -185,17 +210,33 @@ export default function ImagesPage() {
     setSubmitting(true);
     setError(null);
     try {
+      const parsedSeed = seedInput.trim() === '' ? undefined : Number(seedInput);
+      if (parsedSeed !== undefined && (!Number.isFinite(parsedSeed) || parsedSeed < 0)) {
+        throw new Error('Seed must be a non-negative number');
+      }
+      const negativeTrimmed = negative.trim() || undefined;
+
       const res = await fetch('/api/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text }),
+        body: JSON.stringify({
+          prompt: text,
+          character_id: characterId || undefined,
+          negative: negativeTrimmed,
+          seed: parsedSeed,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      const job = await insertImageJob(data.job_id, text, null);
+      const job = await insertImageJob(
+        data.job_id,
+        text,
+        negativeTrimmed ?? null,
+        typeof data.seed === 'number' ? data.seed : null,
+      );
       setJobs((prev) => [job, ...prev]);
       setPrompt('');
       if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -204,7 +245,7 @@ export default function ImagesPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [prompt, submitting]);
+  }, [prompt, submitting, characterId, negative, seedInput]);
 
   const handleDelete = useCallback(async (jobId: string) => {
     await deleteImageJob(jobId);
@@ -213,6 +254,47 @@ export default function ImagesPage() {
 
   const handleStatusChange = useCallback((jobId: string, patch: Partial<ImageJob>) => {
     setJobs((prev) => prev.map((j) => (j.job_id === jobId ? { ...j, ...patch } : j)));
+  }, []);
+
+  const handleReuseSeed = useCallback((seed: number) => {
+    setSeedInput(String(seed));
+    setShowAdvanced(true);
+  }, []);
+
+  const handleInterrogateFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setInterrogating(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/interrogate', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const tagString = data.prompt_string as string;
+      if (!tagString) {
+        throw new Error('No tags found');
+      }
+      // Prepend tags to current prompt, separating with comma
+      setPrompt((prev) => prev.trim() ? `${tagString}, ${prev.trim()}` : tagString);
+      // Auto-resize textarea after content change
+      requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`;
+        }
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInterrogating(false);
+    }
   }, []);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -253,6 +335,45 @@ export default function ImagesPage() {
         className="shrink-0 px-3 py-3 space-y-2"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
+        {characters.length > 0 && (
+          <select
+            value={characterId}
+            onChange={(e) => setCharacterId(e.target.value)}
+            className="w-full rounded-xl px-4 py-3 outline-none"
+            style={{
+              background: 'var(--bg-input)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-primary)',
+              fontSize: '16px',
+            }}
+          >
+            <option value="">No character (free prompt)</option>
+            {characters.map((c) => (
+              <option key={c.id} value={c.id}>
+                Use character: {c.name} ({c.ref_count} ref{c.ref_count === 1 ? '' : 's'})
+              </option>
+            ))}
+          </select>
+        )}
+        <div className="flex items-center gap-2">
+          <input
+            ref={interrogateInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={handleInterrogateFile}
+          />
+          <button
+            type="button"
+            onClick={() => interrogateInputRef.current?.click()}
+            disabled={interrogating}
+            className="rounded-xl px-3 py-2 text-xs disabled:opacity-40"
+            style={{ color: 'var(--text-secondary)', border: '1px solid var(--border)' }}
+          >
+            {interrogating ? 'Reading image…' : '📷 Tag from image'}
+          </button>
+        </div>
+
         <textarea
           ref={textareaRef}
           className="w-full resize-none rounded-xl px-4 py-3 outline-none"
@@ -266,11 +387,58 @@ export default function ImagesPage() {
             lineHeight: '1.5',
           }}
           rows={1}
-          placeholder="masterpiece, best quality, 1girl, kimono, cherry blossoms…"
+          placeholder={
+            characterId
+              ? 'Describe the scene: walking in paris, red dress, evening, smiling…'
+              : 'masterpiece, best quality, 1girl, kimono, cherry blossoms…'
+          }
           value={prompt}
           onChange={handleTextareaChange}
           onKeyDown={handleKeyDown}
         />
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-xs underline"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          {showAdvanced ? 'Hide advanced' : 'Advanced (seed, negative prompt)'}
+        </button>
+
+        {showAdvanced && (
+          <div className="space-y-2">
+            <input
+              type="number"
+              min={0}
+              className="w-full rounded-xl px-4 py-3 outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)',
+                fontSize: '16px',
+              }}
+              placeholder="Seed (leave empty for random)"
+              value={seedInput}
+              onChange={(e) => setSeedInput(e.target.value)}
+            />
+            <textarea
+              className="w-full resize-none rounded-xl px-4 py-3 outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)',
+                fontSize: '16px',
+                minHeight: '72px',
+                lineHeight: '1.5',
+              }}
+              rows={2}
+              placeholder="Negative prompt (leave empty to use server default)"
+              value={negative}
+              onChange={(e) => setNegative(e.target.value)}
+            />
+          </div>
+        )}
+
         <div className="flex items-center justify-between gap-2">
           {error ? (
             <span className="text-xs" style={{ color: '#f87171' }}>{error}</span>
@@ -315,6 +483,7 @@ export default function ImagesPage() {
                 job={job}
                 onDelete={handleDelete}
                 onStatusChange={handleStatusChange}
+                onReuseSeed={handleReuseSeed}
               />
             ))}
           </div>
